@@ -1,0 +1,148 @@
+CREATE TABLE DichVu( 
+    IdDichVu INT PRIMARY KEY AUTO_INCREMENT, 
+    Ten VARCHAR(255) NOT NULL, 
+    Gia DECIMAL(10, 0) NOT NULL, 
+    HinhAnh varchar(255) NOT NULL, 
+    MaSP VARCHAR(255) NOT NULL, 
+    prefix VARCHAR(100) NOT NULL, 
+    TenDanhMuc VARCHAR(255) NOT NULL, 
+    DaXoa BOOLEAN DEFAULT 0 
+);
+
+
+USE sapovn;
+DELIMITER //
+CREATE PROCEDURE sp_ShowDichVu()
+BEGIN
+    SELECT * FROM DichVu WHERE DaXoa = 0;
+END //
+DELIMITER ;
+
+
+DELIMITER //
+
+CREATE PROCEDURE sp_InsertDichVu(
+    IN p_Ten VARCHAR(255), 
+    IN p_Gia DECIMAL(10, 0),
+    IN p_HinhAnh VARCHAR(255),
+    IN p_Prefix VARCHAR(100),
+    IN p_TenDanhMuc VARCHAR(255)
+)
+BEGIN
+    DECLARE v_MaxSuffix INT;    
+    DECLARE v_MaSP VARCHAR(255);
+
+    -- Lấy số lớn nhất hiện có với Prefix
+    SELECT IFNULL(MAX(CAST(SUBSTRING(MaSP, LENGTH(p_Prefix) + 1) AS UNSIGNED)), 0) 
+    INTO v_MaxSuffix
+    FROM DichVu 
+    WHERE prefix = p_Prefix;
+
+    -- Tạo mã sản phẩm mới với số tăng dần
+    SET v_MaSP = CONCAT(p_Prefix, LPAD(v_MaxSuffix + 1, 3, '0'));
+
+    -- Chèn dữ liệu vào bảng DichVu
+    INSERT INTO DichVu (Ten, Gia, HinhAnh, MaSP, prefix, TenDanhMuc, DaXoa)
+    VALUES (p_Ten, p_Gia, p_HinhAnh, v_MaSP, p_Prefix, p_TenDanhMuc, 0);
+END //
+
+DELIMITER ;
+
+
+DELIMITER //
+CREATE PROCEDURE sp_DeleteDichVu(
+    IN p_IdDichVu INT
+)
+BEGIN
+    -- Xóa sản phẩm có IdDichVu được truyền vào
+    DELETE FROM DichVu WHERE IdDichVu = p_IdDichVu;
+
+    -- Cập nhật lại IdDichVu để sắp xếp lại thứ tự liên tục
+    SET @count = 0;
+    UPDATE DichVu SET IdDichVu = (@count := @count + 1) ORDER BY IdDichVu;
+
+    -- Đặt lại giá trị AUTO_INCREMENT để tiếp tục từ giá trị lớn nhất hiện tại + 1
+    SET @max_id = (SELECT MAX(IdDichVu) FROM DichVu);
+    IF @max_id IS NOT NULL THEN
+        SET @stmt = CONCAT('ALTER TABLE DichVu AUTO_INCREMENT = ', @max_id + 1);
+    ELSE
+        SET @stmt = 'ALTER TABLE DichVu AUTO_INCREMENT = 1';
+    END IF;
+    
+    PREPARE stmt FROM @stmt;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+END //
+
+DELIMITER ;
+
+
+DELIMITER //
+
+CREATE PROCEDURE sp_UpdateDichVu(
+    IN p_IdDichVu INT,
+    IN p_Ten VARCHAR(255),
+    IN p_Gia DECIMAL(10, 0),
+    IN p_HinhAnh VARCHAR(255),
+    IN p_Prefix VARCHAR(100),
+    IN p_TenDanhMuc VARCHAR(255)
+)
+BEGIN
+    DECLARE v_OldPrefix VARCHAR(100);
+    DECLARE v_OldMaSP VARCHAR(255);
+    DECLARE v_NewMaSP VARCHAR(255);
+    DECLARE v_MaxSuffix INT;
+    DECLARE v_RowNum INT DEFAULT 0;
+    DECLARE v_Id INT;
+    DECLARE done INT DEFAULT 0;
+    DECLARE cur CURSOR FOR SELECT IdDichVu FROM DichVu WHERE prefix = v_OldPrefix ORDER BY IdDichVu;
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+
+    -- Lấy mã prefix và mã sản phẩm cũ
+    SELECT prefix, MaSP INTO v_OldPrefix, v_OldMaSP FROM DichVu WHERE IdDichVu = p_IdDichVu;
+
+    -- Cập nhật sản phẩm
+    UPDATE DichVu
+    SET 
+        Ten = COALESCE(p_Ten, Ten),
+        Gia = COALESCE(p_Gia, Gia),
+        HinhAnh = COALESCE(p_HinhAnh, HinhAnh),
+        Prefix = COALESCE(p_Prefix, Prefix),
+        TenDanhMuc = COALESCE(p_TenDanhMuc, TenDanhMuc)
+    WHERE IdDichVu = p_IdDichVu;
+
+    -- Nếu mã prefix thay đổi, cập nhật lại mã sản phẩm
+    IF p_Prefix IS NOT NULL AND p_Prefix != v_OldPrefix THEN
+        -- Lấy số lớn nhất hiện có với prefix mới
+        SELECT IFNULL(MAX(CAST(SUBSTRING(MaSP, LENGTH(p_Prefix) + 1) AS UNSIGNED)), 0) 
+        INTO v_MaxSuffix
+        FROM DichVu 
+        WHERE prefix = p_Prefix;
+
+        -- Tạo mã sản phẩm mới với số tăng dần
+        SET v_NewMaSP = CONCAT(p_Prefix, LPAD(v_MaxSuffix + 1, 3, '0'));
+
+        -- Cập nhật mã sản phẩm mới
+        UPDATE DichVu
+        SET MaSP = v_NewMaSP
+        WHERE IdDichVu = p_IdDichVu;
+
+        -- Sắp xếp lại mã sản phẩm của các sản phẩm có mã prefix cũ
+        OPEN cur;
+
+        read_loop: LOOP
+            FETCH cur INTO v_Id;
+            IF done THEN
+                LEAVE read_loop;
+            END IF;
+            SET v_RowNum = v_RowNum + 1;
+            UPDATE DichVu
+            SET MaSP = CONCAT(v_OldPrefix, LPAD(v_RowNum, 3, '0'))
+            WHERE IdDichVu = v_Id;
+        END LOOP;
+
+        CLOSE cur;
+    END IF;
+END //
+
+DELIMITER ;
